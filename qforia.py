@@ -3,25 +3,24 @@ import google.generativeai as genai
 import pandas as pd
 import json
 
-# App config
 st.set_page_config(page_title="Qforia", layout="wide")
-st.title("🔍 Qforia: Query Fan-Out Simulator for AI Surfaces")
+st.title("🔍 Qforia: Trình mô phỏng Query Fan-Out cho AI")
 
-# Sidebar: API key input and query
-st.sidebar.header("Configuration")
-gemini_key = st.sidebar.text_input("Gemini API Key", type="password")
+st.sidebar.header("Cấu hình")
+gemini_key = st.sidebar.text_input("Nhập khóa Gemini API", type="password")
 
-input_mode = st.sidebar.radio("Input Mode", ["Single query", "Bulk list"])
-if input_mode == "Single query":
+input_mode = st.sidebar.radio("Chế độ nhập", ["Truy vấn đơn", "Danh sách hàng loạt"])
+
+if input_mode == "Truy vấn đơn":
     user_query = st.sidebar.text_area(
-        "Enter your query",
-        "What's the best electric SUV for driving up mt rainier?",
+        "Nhập câu hỏi của bạn",
+        "Xe SUV điện nào tốt nhất để lái lên núi Rainier?",
         height=120
     )
 else:
     bulk_text = st.sidebar.text_area(
-        "Paste queries (one per line)",
-        "best electric suv for snow\nsleep training methods for toddlers\nhow to freeze sourdough starter",
+        "Dán các truy vấn (mỗi dòng một câu hỏi)",
+        "Xe SUV điện tốt nhất để đi trong tuyết\nPhương pháp tập ngủ cho trẻ nhỏ\nCách bảo quản men chua trong ngăn đá",
         height=180
     )
 
