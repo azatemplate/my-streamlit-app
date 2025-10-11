@@ -24,7 +24,7 @@ else:
         height=180
     )
 
-mode = st.sidebar.radio("Search Mode", ["AI Overview (simple)", "AI Mode (complex)"])
+mode = st.sidebar.radio("Chế độ tìm kiếm", ["Tổng quan AI (đơn giản)", "Chế độ AI (nâng cao)"])
 
 # Configure Gemini (use 2.5 Pro)
 if gemini_key:
