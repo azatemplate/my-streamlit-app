@@ -3,110 +3,106 @@ import google.generativeai as genai
 import pandas as pd
 import json
 
+# -----------------------------
+# 🧱 Cấu hình giao diện chính
+# -----------------------------
 st.set_page_config(page_title="Qforia", layout="wide")
 st.title("🔍 Qforia: Trình mô phỏng Query Fan-Out cho AI")
 
+# -----------------------------
+# ⚙️ Cấu hình bên trái
+# -----------------------------
 st.sidebar.header("Cấu hình")
-gemini_key = st.sidebar.text_input("Nhập khóa Gemini API", type="password")
+gemini_key = st.sidebar.text_input("🔑 Nhập khóa Gemini API", type="password")
 
-input_mode = st.sidebar.radio("Chế độ nhập", ["Truy vấn đơn", "Danh sách hàng loạt"])
+input_mode = st.sidebar.radio(
+    "Chế độ nhập truy vấn",
+    ["Truy vấn đơn", "Danh sách hàng loạt"]
+)
 
 if input_mode == "Truy vấn đơn":
     user_query = st.sidebar.text_area(
-        "Nhập câu hỏi của bạn",
+        "✍️ Nhập câu hỏi của bạn",
         "Xe SUV điện nào tốt nhất để lái lên núi Rainier?",
         height=120
     )
 else:
     bulk_text = st.sidebar.text_area(
-        "Dán các truy vấn (mỗi dòng một câu hỏi)",
+        "📋 Dán các truy vấn (mỗi dòng một câu hỏi)",
         "Xe SUV điện tốt nhất để đi trong tuyết\nPhương pháp tập ngủ cho trẻ nhỏ\nCách bảo quản men chua trong ngăn đá",
         height=180
     )
 
-mode = st.sidebar.radio("Chế độ tìm kiếm", ["Tổng quan AI (đơn giản)", "Chế độ AI (nâng cao)"])
+mode = st.sidebar.radio(
+    "🧠 Chế độ tìm kiếm",
+    ["Tổng quan AI (đơn giản)", "Chế độ AI (nâng cao)"]
+)
 
-# Configure Gemini (use 2.5 Pro)
+# -----------------------------
+# 🔐 Cấu hình API Gemini
+# -----------------------------
 if gemini_key:
     genai.configure(api_key=gemini_key)
-    # You can change to a pinned version like "gemini-2.5-pro-exp-0827" if desired.
     model_name = "gemini-2.5-pro"
     model = genai.GenerativeModel(model_name)
 else:
-    st.error("Please enter your Gemini API Key to proceed.")
+    st.error("⚠️ Vui lòng nhập Gemini API Key để tiếp tục.")
     st.stop()
 
-# Allowed routing formats (sent to the model)
+# -----------------------------
+# 📚 Các loại định dạng nội dung
+# -----------------------------
 ALLOWED_FORMATS = [
-    "web_article",
-    "faq_page",
-    "how_to_steps",
-    "comparison_table",
-    "buyers_guide",
-    "checklist",
-    "product_spec_sheet",
-    "glossary/definition",
-    "pricing_page",
-    "review_roundup",
-    "tutorial_video/transcript",
-    "podcast_transcript",
-    "code_samples/docs",
-    "api_reference",
-    "calculator/tool",
-    "dataset",
-    "image_gallery",
-    "map/local_pack",
-    "forum/qna",
-    "pdf_whitepaper",
-    "case_study",
-    "press_release",
+    "web_article", "faq_page", "how_to_steps", "comparison_table",
+    "buyers_guide", "checklist", "product_spec_sheet", "glossary/definition",
+    "pricing_page", "review_roundup", "tutorial_video/transcript",
+    "podcast_transcript", "code_samples/docs", "api_reference",
+    "calculator/tool", "dataset", "image_gallery", "map/local_pack",
+    "forum/qna", "pdf_whitepaper", "case_study", "press_release",
     "interactive_widget"
 ]
 
-# Prompt builder
+# -----------------------------
+# 🧩 Hàm tạo prompt cho mô hình
+# -----------------------------
 def QUERY_FANOUT_PROMPT(q, mode):
     min_queries_simple = 10
     min_queries_complex = 20
 
-    if mode == "AI Overview (simple)":
+    if mode == "Tổng quan AI (đơn giản)":
         num_queries_instruction = (
-            f"First, analyze the user's query: \"{q}\". Based on its complexity and the '{mode}' mode, "
-            f"you must decide on an optimal number of queries to generate. "
-            f"This number must be at least {min_queries_simple}. "
-            f"For a straightforward query, generate around {min_queries_simple}-{min_queries_simple + 2}. "
-            f"If the query has a few distinct aspects or common follow-ups, aim for {min_queries_simple + 3}-{min_queries_simple + 5}. "
-            f"Provide brief reasoning for why you chose this number."
+            f"Phân tích truy vấn: \"{q}\". Dựa trên chế độ '{mode}', "
+            f"bạn cần xác định số lượng truy vấn mở rộng tối ưu (tối thiểu {min_queries_simple}). "
+            f"Với truy vấn đơn giản, tạo khoảng {min_queries_simple}-{min_queries_simple + 2} truy vấn. "
+            f"Nếu có nhiều khía cạnh, tạo {min_queries_simple + 3}-{min_queries_simple + 5} truy vấn. "
+            f"Hãy giải thích ngắn gọn lý do chọn số lượng này."
         )
     else:
         num_queries_instruction = (
-            f"First, analyze the user's query: \"{q}\". Based on its complexity and the '{mode}' mode, "
-            f"you must decide on an optimal number of queries to generate. "
-            f"This number must be at least {min_queries_complex}. "
-            f"For multifaceted queries that span comparisons, procedures, specs, or trade-offs, "
-            f"generate {min_queries_complex + 5}-{min_queries_complex + 10} or more. "
-            f"Provide brief reasoning for your number."
+            f"Phân tích truy vấn: \"{q}\". Dựa trên chế độ '{mode}', "
+            f"bạn cần xác định số lượng truy vấn mở rộng tối ưu (tối thiểu {min_queries_complex}). "
+            f"Với truy vấn phức tạp (so sánh, hướng dẫn, đặc tả...), tạo "
+            f"{min_queries_complex + 5}-{min_queries_complex + 10} truy vấn. "
+            f"Hãy giải thích lý do."
         )
 
     routing_note = (
-        "For EACH expanded query, also identify the most likely CONTENT TYPE / FORMAT the routing system would prefer "
-        "for retrieval and synthesis (e.g., a how-to should route to 'how_to_steps' or a video transcript; comparisons to 'comparison_table' or 'buyers_guide'). "
-        "Choose exactly ONE label from this fixed list:\n"
+        "Với MỖI truy vấn mở rộng, hãy xác định kiểu nội dung phù hợp nhất "
+        "(ví dụ: hướng dẫn → 'how_to_steps', so sánh → 'comparison_table', bài viết → 'web_article'). "
+        "Chỉ chọn MỘT nhãn trong danh sách sau:\n"
         + ", ".join(ALLOWED_FORMATS) +
-        ".\nReturn it in a field named 'routing_format' and give a short 'format_reason' (1 sentence)."
+        ".\nTrả về JSON với các trường 'routing_format' và 'format_reason'."
     )
 
     return (
-        f"You are simulating Google's AI Mode query fan-out for generative search systems.\n"
-        f"The user's original query is: \"{q}\". The selected mode is: \"{mode}\".\n\n"
-        f"Your first task is to determine the total number of queries to generate and the reasoning for this number:\n"
+        f"Bạn đang mô phỏng hệ thống fan-out truy vấn của Google.\n"
+        f"Truy vấn gốc: \"{q}\"\nChế độ: \"{mode}\"\n\n"
         f"{num_queries_instruction}\n\n"
-        f"Once you have decided on the number and the reasoning, generate exactly that many unique synthetic queries.\n"
-        f"Each of the following transformation types MUST be represented at least once, if the total allows:\n"
-        f"1. Reformulations\n2. Related Queries\n3. Implicit Queries\n4. Comparative Queries\n5. Entity Expansions\n6. Personalized Queries\n\n"
-        f"The 'reasoning' field for each query should explain why that query was generated (tie it to the original query, its type, and user intent). "
-        f"Do NOT include queries dependent on real-time user history or geolocation.\n\n"
+        f"Mỗi loại biến thể cần có ít nhất một truy vấn:\n"
+        f"1. Reformulations\n2. Related Queries\n3. Implicit Queries\n4. Comparative Queries\n"
+        f"5. Entity Expansions\n6. Personalized Queries\n\n"
         f"{routing_note}\n\n"
-        f"Return only a valid JSON object in this exact schema:\n"
+        f"Trả về JSON đúng cấu trúc sau:\n"
         "{\n"
         "  \"generation_details\": {\n"
         "    \"target_query_count\": 12,\n"
@@ -119,19 +115,21 @@ def QUERY_FANOUT_PROMPT(q, mode):
         "      \"user_intent\": \"...\",\n"
         "      \"reasoning\": \"...\",\n"
         "      \"routing_format\": \"one_of_allowed_labels\",\n"
-        "      \"format_reason\": \"one sentence why this format is best\"\n"
+        "      \"format_reason\": \"1 câu lý do\"\n"
         "    }\n"
         "  ]\n"
         "}"
     )
 
-# Single fan-out
+# -----------------------------
+# 🧮 Hàm sinh kết quả fan-out
+# -----------------------------
 def generate_fanout(query, mode):
     prompt = QUERY_FANOUT_PROMPT(query, mode)
     response = model.generate_content(prompt)
     json_text = response.text.strip()
 
-    # Clean code fences if present
+    # Xử lý khi có markdown fence
     if json_text.startswith("```json"):
         json_text = json_text[7:]
     if json_text.endswith("```"):
@@ -144,27 +142,26 @@ def generate_fanout(query, mode):
 
     return generation_details, expanded_queries, json_text
 
-# Initialize session state
+# -----------------------------
+# 🚀 Chạy mô phỏng
+# -----------------------------
 if 'last_runs' not in st.session_state:
     st.session_state.last_runs = []
 
-# Run button
-if st.sidebar.button("Run Fan-Out 🚀"):
-    # Build list of lookup queries
-    if input_mode == "Single query":
+if st.sidebar.button("🚀 Chạy Fan-Out"):
+    # Tạo danh sách truy vấn
+    if input_mode == "Truy vấn đơn":
         lookups = [user_query.strip()] if user_query.strip() else []
     else:
         lookups = [q.strip() for q in bulk_text.splitlines() if q.strip()]
 
     if not lookups:
-        st.warning("⚠️ Please provide at least one query.")
+        st.warning("⚠️ Vui lòng nhập ít nhất một truy vấn.")
         st.stop()
 
-    all_rows = []
-    run_summaries = []
-    errors = []
+    all_rows, run_summaries, errors = [], [], []
 
-    status = st.status("Processing queries…", expanded=True)
+    status = st.status("🔄 Đang xử lý truy vấn…", expanded=True)
     progress = st.progress(0)
     total = len(lookups)
 
@@ -172,71 +169,56 @@ if st.sidebar.button("Run Fan-Out 🚀"):
         try:
             details, expanded, raw = generate_fanout(q, mode)
             run_summaries.append({
-                "lookup_query": q,
-                "target_query_count": details.get("target_query_count"),
-                "reasoning_for_count": details.get("reasoning_for_count", "")
+                "Truy vấn gốc": q,
+                "Số lượng mục tiêu": details.get("target_query_count"),
+                "Giải thích": details.get("reasoning_for_count", "")
             })
-            # Flatten rows, prefix with lookup query
             for obj in expanded:
                 all_rows.append({
-                    "lookup_query": q,
-                    "query": obj.get("query", ""),
-                    "type": obj.get("type", ""),
-                    "user_intent": obj.get("user_intent", ""),
-                    "reasoning": obj.get("reasoning", ""),
-                    "routing_format": obj.get("routing_format", ""),
-                    "format_reason": obj.get("format_reason", "")
+                    "Truy vấn gốc": q,
+                    "Truy vấn mở rộng": obj.get("query", ""),
+                    "Loại": obj.get("type", ""),
+                    "Ý định người dùng": obj.get("user_intent", ""),
+                    "Giải thích": obj.get("reasoning", ""),
+                    "Định dạng": obj.get("routing_format", ""),
+                    "Lý do định dạng": obj.get("format_reason", "")
                 })
-            status.write(f"✅ Processed: **{q}** — generated {len(expanded)} queries.")
+            status.write(f"✅ Hoàn tất: **{q}** — tạo {len(expanded)} truy vấn.")
         except json.JSONDecodeError as e:
-            msg = f"❌ JSON parse failed for '{q}': {e}"
+            msg = f"❌ Lỗi JSON khi xử lý '{q}': {e}"
             status.write(msg)
-            errors.append({"lookup_query": q, "error": str(e)})
+            errors.append({"Truy vấn": q, "Lỗi": str(e)})
         except Exception as e:
-            msg = f"❌ Error for '{q}': {e}"
+            msg = f"❌ Lỗi khác khi xử lý '{q}': {e}"
             status.write(msg)
-            errors.append({"lookup_query": q, "error": str(e)})
+            errors.append({"Truy vấn": q, "Lỗi": str(e)})
 
         progress.progress(i / total)
 
-    status.update(label="Complete.", state="complete")
+    status.update(label="✅ Hoàn tất toàn bộ.", state="complete")
 
-    # Build output DataFrame (lookup_query first)
+    # Kết quả
     if all_rows:
         df = pd.DataFrame(all_rows)
-
-        # Ensure column order (lookup_query first)
-        preferred_cols = [
-            "lookup_query",
-            "query",
-            "type",
-            "user_intent",
-            "reasoning",
-            "routing_format",
-            "format_reason"
-        ]
-        existing = [c for c in preferred_cols if c in df.columns]
-        others = [c for c in df.columns if c not in existing]
-        df = df[existing + others]
-
-        st.subheader("📊 Synthetic Queries (with routing format)")
+        st.subheader("📊 Kết quả Fan-Out")
         st.dataframe(df, use_container_width=True, height=(min(len(df), 20) + 1) * 35 + 3)
 
         csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download CSV", data=csv, file_name="qforia_output_bulk_with_routing.csv", mime="text/csv")
+        st.download_button(
+            "📥 Tải về CSV",
+            data=csv,
+            file_name="qforia_output.csv",
+            mime="text/csv"
+        )
     else:
-        st.warning("No synthetic queries were generated.")
+        st.warning("Không có truy vấn mở rộng nào được tạo ra.")
 
-    # Summaries per lookup (optional)
     if run_summaries:
         st.markdown("---")
-        st.subheader("🧠 Generation Plans (per lookup)")
-        sum_df = pd.DataFrame(run_summaries)
-        st.dataframe(sum_df, use_container_width=True)
+        st.subheader("🧠 Tóm tắt kế hoạch sinh truy vấn")
+        st.dataframe(pd.DataFrame(run_summaries), use_container_width=True)
 
-    # Error table if any
     if errors:
         st.markdown("---")
-        st.subheader("⚠️ Errors")
-        err_df = pd.DataFrame(errors)
-        st.dataframe(err_df, use_container_width=True)
+        st.subheader("⚠️ Lỗi trong quá trình xử lý")
+        st.dataframe(pd.DataFrame(errors), use_container_width=True)
