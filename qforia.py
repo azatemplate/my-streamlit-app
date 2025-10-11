@@ -10,45 +10,13 @@ st.set_page_config(page_title="Qforia", layout="wide")
 st.title("🔍 Qforia: Trình mô phỏng Query Fan-Out cho AI")
 
 # -----------------------------
-# ⚙️ Cấu hình bên trái (Sidebar)
+# ⚙️ Cấu hình bên trái
 # -----------------------------
 st.sidebar.header("Cấu hình")
+gemini_key = st.sidebar.text_input("🔑 Nhập khóa Gemini API", type="password")
 
-# 🧠 Lưu API Key trong session_state
-if "gemini_key" not in st.session_state:
-    st.session_state.gemini_key = ""
-
-gemini_key = st.sidebar.text_input(
-    "🔑 Nhập khóa Gemini API",
-    value=st.session_state.gemini_key,
-    type="password",
-    help="Nhập một lần, hệ thống sẽ tự ghi nhớ trong phiên làm việc."
-)
-
-# Cập nhật session_state nếu có nhập mới
-if gemini_key:
-    st.session_state.gemini_key = gemini_key
-
-# Nếu chưa có key, hiển thị thông báo
-if not st.session_state.gemini_key:
-    st.warning("⚠️ Vui lòng nhập Gemini API Key để tiếp tục.")
-    st.stop()
-
-# -----------------------------
-# 🔐 Cấu hình API Gemini
-# -----------------------------
-try:
-    genai.configure(api_key=st.session_state.gemini_key)
-    model = genai.GenerativeModel("gemini-2.5-pro")
-except Exception as e:
-    st.error(f"❌ Lỗi cấu hình API: {e}")
-    st.stop()
-
-# -----------------------------
-# 🧩 Cấu hình chế độ và truy vấn
-# -----------------------------
 input_mode = st.sidebar.radio(
-    "📝 Chế độ nhập truy vấn",
+    "Chế độ nhập truy vấn",
     ["Truy vấn đơn", "Danh sách hàng loạt"]
 )
 
@@ -69,6 +37,17 @@ mode = st.sidebar.radio(
     "🧠 Chế độ tìm kiếm",
     ["Tổng quan AI (đơn giản)", "Chế độ AI (nâng cao)"]
 )
+
+# -----------------------------
+# 🔐 Cấu hình API Gemini
+# -----------------------------
+if gemini_key:
+    genai.configure(api_key=gemini_key)
+    model_name = "gemini-2.5-pro"
+    model = genai.GenerativeModel(model_name)
+else:
+    st.error("⚠️ Vui lòng nhập Gemini API Key để tiếp tục.")
+    st.stop()
 
 # -----------------------------
 # 📚 Các loại định dạng nội dung
@@ -150,6 +129,7 @@ def generate_fanout(query, mode):
     response = model.generate_content(prompt)
     json_text = response.text.strip()
 
+    # Xử lý khi có markdown fence
     if json_text.startswith("```json"):
         json_text = json_text[7:]
     if json_text.endswith("```"):
@@ -169,7 +149,7 @@ if 'last_runs' not in st.session_state:
     st.session_state.last_runs = []
 
 if st.sidebar.button("🚀 Chạy Fan-Out"):
-    # Danh sách truy vấn
+    # Tạo danh sách truy vấn
     if input_mode == "Truy vấn đơn":
         lookups = [user_query.strip()] if user_query.strip() else []
     else:
@@ -217,7 +197,7 @@ if st.sidebar.button("🚀 Chạy Fan-Out"):
 
     status.update(label="✅ Hoàn tất toàn bộ.", state="complete")
 
-    # Kết quả hiển thị
+    # Kết quả
     if all_rows:
         df = pd.DataFrame(all_rows)
         st.subheader("📊 Kết quả Fan-Out")
