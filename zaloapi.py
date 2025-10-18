@@ -1,29 +1,15 @@
 import streamlit as st
-import subprocess
-import sys
 from PIL import Image, ImageFile
 import os
 import json
 import time
-
-# ✅ AUTO-INSTALL MISSING PACKAGES
-@st.cache_data
-def install_package(package):
-    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-
-try:
-    import piexif
-except ImportError:
-    st.warning("⏳ Đang cài đặt piexif...")
-    install_package("piexif")
-    import piexif
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 CONFIG_FILE = "config.json"
 OUTPUT_FOLDER = "output"
 
-# ========== Các hàm xử lý ảnh & metadata ==========
+# ========== Các hàm xử lý ảnh (KHÔNG DÙNG piexif) ==========
 def load_metadata_from_file(file_path):
     metadata = {}
     if os.path.exists(file_path):
@@ -38,65 +24,19 @@ def load_metadata_from_file(file_path):
             pass
     return metadata
 
-def rational_to_dms(value):
-    try:
-        degrees = int(float(value))
-        minutes = int((float(value) - degrees) * 60)
-        seconds = int((float(value) - degrees - minutes / 60) * 3600)
-        return [(degrees, 1), (minutes, 1), (seconds, 1)]
-    except:
-        return [(0, 1), (0, 1), (0, 1)]
-
 def remove_diacritics(input_str):
-    try:
-        import unicodedata
-        nfkd_form = unicodedata.normalize('NFKD', input_str)
-        return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
-    except:
-        return input_str
-
-def edit_image_metadata(output_image_path, metadata):
-    try:
-        img = Image.open(output_image_path)
-        exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "Interop": {}, "1st": {}, "thumbnail": None}
-
-        image_name = os.path.splitext(os.path.basename(output_image_path))[0]
-
-        if "ImageDescription" not in metadata or not metadata["ImageDescription"]:
-            metadata["ImageDescription"] = image_name
-        if "XPTitle" not in metadata or not metadata["XPTitle"]:
-            metadata["XPTitle"] = image_name
-        if "XPSubject" not in metadata or not metadata["XPSubject"]:
-            metadata["XPSubject"] = image_name
-        if "Comments" not in metadata or not metadata["Comments"]:
-            metadata["Comments"] = image_name
-        if "DateTimeOriginal" not in metadata or not metadata["DateTimeOriginal"]:
-            metadata["DateTimeOriginal"] = time.strftime("%Y:%m:%d %H:%M:%S")
-
-        metadata["Tags"] = remove_diacritics(metadata.get("Tags", ""))
-        metadata["Comments"] = remove_diacritics(metadata.get("Comments", ""))
-
-        if "GPSLatitude" in metadata and "GPSLongitude" in metadata:
-            exif_dict["GPS"][piexif.GPSIFD.GPSLatitude] = rational_to_dms(metadata["GPSLatitude"])
-            exif_dict["GPS"][piexif.GPSIFD.GPSLongitude] = rational_to_dms(metadata["GPSLongitude"])
-            exif_dict["GPS"][piexif.GPSIFD.GPSLatitudeRef] = b'N' if float(metadata["GPSLatitude"]) >= 0 else b'S'
-            exif_dict["GPS"][piexif.GPSIFD.GPSLongitudeRef] = b'E' if float(metadata["GPSLongitude"]) >= 0 else b'W'
-
-        exif_dict["0th"][piexif.ImageIFD.ImageDescription] = metadata["ImageDescription"].encode('utf-8')
-        exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal] = metadata["DateTimeOriginal"].encode('utf-8')
-
-        exif_dict["0th"][piexif.ImageIFD.Rating] = 5
-        exif_dict["0th"][piexif.ImageIFD.RatingPercent] = 100
-
-        exif_dict["0th"][piexif.ImageIFD.XPComment] = metadata["Comments"].encode('utf-16le', errors='ignore')
-        exif_dict["0th"][piexif.ImageIFD.XPTitle] = metadata["XPTitle"].encode('utf-16le', errors='ignore')
-        exif_dict["0th"][piexif.ImageIFD.XPSubject] = metadata["XPSubject"].encode('utf-16le', errors='ignore')
-        exif_dict["0th"][piexif.ImageIFD.XPKeywords] = metadata["Tags"].encode('utf-16le', errors='ignore')
-
-        exif_bytes = piexif.dump(exif_dict)
-        img.save(output_image_path, "jpeg", exif=exif_bytes)
-    except Exception as e:
-        pass  # Silent fail for non-JPG
+    # Simple version không cần unicodedata
+    return input_str.replace("á", "a").replace("à", "a").replace("ả", "a").replace("ã", "a").replace("ạ", "a") \
+                   .replace("â", "a").replace("ầ", "a").replace("ấ", "a").replace("ẩ", "a").replace("ẫ", "a").replace("ậ", "a") \
+                   .replace("é", "e").replace("è", "e").replace("ẻ", "e").replace("ẽ", "e").replace("ẹ", "e") \
+                   .replace("ê", "e").replace("ề", "e").replace("ế", "e").replace("ể", "e").replace("ễ", "e").replace("ệ", "e") \
+                   .replace("í", "i").replace("ì", "i").replace("ỉ", "i").replace("ĩ", "i").replace("ị", "i") \
+                   .replace("ó", "o").replace("ò", "o").replace("ỏ", "o").replace("õ", "o").replace("ọ", "o") \
+                   .replace("ô", "o").replace("ồ", "o").replace("ố", "o").replace("ổ", "o").replace("ỗ", "o").replace("ộ", "o") \
+                   .replace("ơ", "o").replace("ờ", "o").replace("ớ", "o").replace("ở", "o").replace("ỡ", "o").replace("ợ", "o") \
+                   .replace("ú", "u").replace("ù", "u").replace("ủ", "u").replace("ũ", "u").replace("ụ", "u") \
+                   .replace("ư", "u").replace("ừ", "u").replace("ứ", "u").replace("ử", "u").replace("ữ", "u").replace("ự", "u") \
+                   .replace("ý", "y").replace("ỳ", "y").replace("ỷ", "y").replace("ỹ", "y").replace("ỵ", "y")
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -126,13 +66,16 @@ def process_single_image(img_path, config, metadata, logo_path):
         image.load()
         image.thumbnail((config["max_size"], config["max_size"]))
 
+        # Xử lý nền trong suốt
         if image.mode == "RGBA":
             background = Image.new("RGB", image.size, (255, 255, 255))
             background.paste(image, (0, 0), image)
             image = background
 
+        # Chèn logo nếu có
         if logo_path and os.path.exists(logo_path):
             logo = Image.open(logo_path).convert("RGBA")
+            
             base_scale = 1 / 3
             user_scale = config["logo_scale"] / 100.0
             logo_scale = base_scale * user_scale
@@ -140,11 +83,13 @@ def process_single_image(img_path, config, metadata, logo_path):
             logo_height = int(logo_width * (logo.height / logo.width))
             logo_resized = logo.resize((logo_width, logo_height), Image.LANCZOS)
 
+            # Áp dụng độ mờ
             opacity_value = config["opacity"] / 100.0
             alpha = logo_resized.split()[3]
             alpha = alpha.point(lambda p: int(p * opacity_value))
             logo_resized.putalpha(alpha)
 
+            # Vị trí logo
             position = config["logo_position"]
             if position == "third":
                 x = image.width // 3
@@ -157,17 +102,24 @@ def process_single_image(img_path, config, metadata, logo_path):
 
             image.paste(logo_resized, (x, y), logo_resized)
 
+        # Lưu ảnh
         out_ext = config["output_format"].lower()
         out_name = os.path.splitext(os.path.basename(img_path))[0] + f".{out_ext}"
         output_image_path = os.path.join(OUTPUT_FOLDER, out_name)
 
         if out_ext in ["jpg", "jpeg"]:
             image.convert("RGB").save(output_image_path, "JPEG", quality=85, optimize=True)
-            edit_image_metadata(output_image_path, metadata.copy())
         elif out_ext == "png":
             image.save(output_image_path, "PNG", optimize=True)
         elif out_ext == "webp":
             image.save(output_image_path, "WEBP", quality=80, method=6)
+
+        # Metadata đơn giản (text file kèm theo)
+        if metadata:
+            meta_name = out_name + ".txt"
+            with open(os.path.join(OUTPUT_FOLDER, meta_name), "w", encoding="utf-8") as f:
+                for key, value in metadata.items():
+                    f.write(f"{key}: {value}\n")
 
         return output_image_path, True
     except Exception as e:
@@ -177,9 +129,10 @@ def process_single_image(img_path, config, metadata, logo_path):
 def main():
     st.set_page_config(page_title="GEOTAG ẢNH", page_icon="📸", layout="wide")
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+    os.makedirs("temp", exist_ok=True)
 
     st.title("📸 GEOTAG ẢNH HOÀNG LOẠT")
-    st.markdown("*HỖ TRỢ: 0967849934*")
+    st.markdown("**HỖ TRỢ: 0967849934** | *Không cần cài thêm package!*")
 
     config = load_config()
 
@@ -194,9 +147,15 @@ def main():
             index=0 if config["logo_position"] == "third" else 1
         )
         col1, col2 = st.columns(2)
-        with col1: config["opacity"] = st.slider("Độ mờ (%)", 0, 100, config["opacity"])
-        with col2: config["logo_scale"] = st.slider("Kích thước (%)", 10, 200, config["logo_scale"])
-        config["output_format"] = st.selectbox("Định dạng", ["jpg", "jpeg", "png", "webp"], index=["jpg", "jpeg", "png", "webp"].index(config["output_format"]))
+        with col1: 
+            config["opacity"] = st.slider("Độ mờ (%)", 0, 100, config["opacity"])
+        with col2: 
+            config["logo_scale"] = st.slider("Kích thước (%)", 10, 200, config["logo_scale"])
+        config["output_format"] = st.selectbox(
+            "Định dạng", 
+            ["jpg", "jpeg", "png", "webp"], 
+            index=["jpg", "jpeg", "png", "webp"].index(config["output_format"])
+        )
         
         if st.button("💾 Lưu"): 
             save_config(config)
@@ -206,11 +165,14 @@ def main():
 
     with col1:
         st.subheader("📁 Chọn Ảnh")
-        uploaded_files = st.file_uploader("Chọn ảnh", type=['jpg', 'jpeg', 'png', 'webp', 'heic'], accept_multiple_files=True)
+        uploaded_files = st.file_uploader(
+            "Chọn nhiều ảnh", 
+            type=['jpg', 'jpeg', 'png', 'webp', 'heic'], 
+            accept_multiple_files=True
+        )
         
+        image_paths = []
         if uploaded_files:
-            image_paths = []
-            os.makedirs("temp", exist_ok=True)
             for file in uploaded_files:
                 temp_path = os.path.join("temp", file.name)
                 with open(temp_path, "wb") as f:
@@ -218,7 +180,9 @@ def main():
                 image_paths.append(temp_path)
             
             st.success(f"✅ **{len(image_paths)} ảnh**")
-            st.text("\n".join([f"• {os.path.basename(p)}" for p in image_paths[:5]]))
+            with st.expander("📋 Danh sách ảnh"):
+                for path in image_paths:
+                    st.text(f"• {os.path.basename(path)}")
 
     with col2:
         st.subheader("🏷️ Metadata")
@@ -229,62 +193,97 @@ def main():
                 f.write("Tags: từ khóa 1, từ khóa 2\n")
                 f.write("GPSLatitude: 21.0285\n")
                 f.write("GPSLongitude: 105.8542\n")
+                f.write("Artist: Hoàng Loạt\n")
+                f.write("Copyright: 2025\n")
             st.success("✅ Đã tạo `metadata.txt`!")
+
+        st.info("**Mỗi ảnh sẽ có file `.txt` kèm metadata**")
 
         st.subheader("🏷️ Logo")
         logo_file = st.file_uploader("Chọn logo", type=['png', 'jpg', 'jpeg'])
         if logo_file:
-            logo_path = os.path.join("temp", logo_file.name)
+            logo_path = os.path.join("temp", f"logo_{int(time.time())}_{logo_file.name}")
             with open(logo_path, "wb") as f:
                 f.write(logo_file.getbuffer())
-            st.image(logo_file, width=150)
+            st.image(logo_file, caption="Logo Preview", width=150)
             config["logo_path"] = logo_path
         else:
             config["logo_path"] = ""
 
-    # Process
-    if st.button("🚀 CHẠY XỬ LÝ", type="primary") and uploaded_files:
+    # Process button
+    if st.button("🚀 CHẠY XỬ LÝ", type="primary", use_container_width=True):
+        if not image_paths:
+            st.warning("⚠️ **Chọn ảnh trước!**")
+            st.stop()
+        
         if not os.path.exists("metadata.txt"):
             st.error("❌ **Cần metadata.txt!** Click 'Tạo metadata.txt'")
-            return
+            st.stop()
 
         metadata = load_metadata_from_file("metadata.txt")
         save_config(config)
 
+        st.subheader("⏳ ĐANG XỬ LÝ...")
         progress_bar = st.progress(0)
         status_text = st.empty()
-        result_text = st.empty()
+        result_placeholder = st.container()
 
         success_count = 0
         total = len(image_paths)
 
         for i, img_path in enumerate(image_paths):
-            status_text.text(f"⏳ {os.path.basename(img_path)} ({i+1}/{total})")
-            progress_bar.progress((i + 1) / total)
+            with result_placeholder.container():
+                status_text.text(f"⏳ {os.path.basename(img_path)} ({i+1}/{total})")
+                progress_bar.progress((i + 1) / total)
 
-            output_path, error = process_single_image(img_path, config, metadata, config.get("logo_path"))
-            
-            if error:
-                result_text.error(f"❌ {os.path.basename(img_path)}")
-            else:
-                success_count += 1
-                result_text.success(f"✅ {os.path.basename(output_path)}")
+                output_path, error = process_single_image(
+                    img_path, config, metadata, config.get("logo_path")
+                )
+                
+                if error:
+                    st.error(f"❌ {os.path.basename(img_path)}: {error}")
+                else:
+                    success_count += 1
+                    st.success(f"✅ {os.path.basename(output_path)}")
 
         progress_bar.progress(1.0)
-        st.success(f"🎉 **{success_count}/{total} THÀNH CÔNG!**")
-        st.info(f"📁 **Output:** `{OUTPUT_FOLDER}`")
+        status_text.text("🎉 HOÀN TẤT!")
 
-        # Download button
-        with open(os.path.join(OUTPUT_FOLDER, "result.txt"), "w") as f:
-            f.write(f"Thành công: {success_count}/{total}\n")
-        with open(os.path.join(OUTPUT_FOLDER, "result.txt"), "rb") as f:
-            st.download_button("📥 Tải kết quả", f, "geotag_result.zip")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.success(f"**{success_count}/{total} THÀNH CÔNG!**")
+        with col_b:
+            st.info(f"📁 **Output:** `{OUTPUT_FOLDER}`")
 
-    elif st.button("🚀 CHẠY XỬ LÝ"):
-        st.warning("⚠️ Chọn ảnh trước!")
+        # Download all images
+        if success_count > 0:
+            st.subheader("📥 TẢI KẾT QUẢ")
+            
+            # List files
+            output_files = [f for f in os.listdir(OUTPUT_FOLDER) if f.endswith(('.jpg', '.jpeg', '.png', '.webp'))]
+            if output_files:
+                cols = st.columns(min(4, len(output_files)))
+                for i, filename in enumerate(output_files):
+                    with cols[i % 4]:
+                        img_path = os.path.join(OUTPUT_FOLDER, filename)
+                        with open(img_path, "rb") as f:
+                            st.download_button(
+                                label=f"⬇️ {filename}",
+                                data=f.read(),
+                                file_name=filename,
+                                mime="image/jpeg"
+                            )
+
+                # Preview
+                st.subheader("👀 XEM TRƯỚC")
+                preview_cols = st.columns(3)
+                for i, filename in enumerate(output_files[:3]):
+                    with preview_cols[i]:
+                        img = Image.open(os.path.join(OUTPUT_FOLDER, filename))
+                        st.image(img, caption=filename, width=150)
 
     st.markdown("---")
-    st.markdown("*© 2025 GEOTAG ẢNH - 0967849934*")
+    st.markdown("*© 2025 GEOTAG ẢNH HOÀNG LOẠT - HỖ TRỢ: 0967849934*")
 
 if __name__ == "__main__":
     main()
