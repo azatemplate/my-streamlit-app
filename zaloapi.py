@@ -1,640 +1,346 @@
 import streamlit as st
-import requests
-import time
+from PIL import Image, ImageFile
+import os
+import piexif
 from datetime import datetime
+import unicodedata
 import json
-import logging
-import pandas as pd
+import time
 
-current_version = "1.0.0.00010"
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-# Setup logging
-logging.basicConfig(filename='api_debug.log', level=logging.DEBUG, 
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+CONFIG_FILE = "config.json"
+OUTPUT_FOLDER = "output"
 
-# API URLs
-API_URLS = {
-    'addfriend': 'https://hongvippro.com/zalo/addfriend.php',
-    'checkinfo': 'https://hongvippro.com/zalo/checkinfo.php',
-    'scangroup': 'https://hongvippro.com/zalo/scangroup1.php',
-    'sendmessages': 'https://hongvippro.com/zalo/sendmessages.php',
-    'getfriends': 'https://hongvippro.com/zalo/getfriends.php',
-    'sendmessagefriends': 'https://hongvippro.com/zalo/sendmessages.php',
-    'sendmessagegroups': 'https://hongvippro.com/zalo/sendmessages.php',
-    'getgroups': 'https://hongvippro.com/zalo/getnhom.php',
-    'sendmessagelistgroups': 'https://hongvippro.com/zalo/sendmessages_nhom.php',
-    'invitegroups': 'https://hongvippro.com/zalo/invitegroup.php'
-}
+# ========== Các hàm xử lý ảnh & metadata ==========
+def load_metadata_from_file(file_path):
+    metadata = {}
+    if os.path.exists(file_path):
+        with open(file_path, 'r', encoding='utf-8-sig') as file:
+            for line in file:
+                line = line.strip()
+                if ": " in line:
+                    key, value = line.split(": ", 1)
+                    metadata[key] = value
+    return metadata
 
-def main():
-    st.set_page_config(page_title="Zalo API Tool", layout="wide")
-    st.title(f"Zalo API Tool - Version {current_version}")
+def rational_to_dms(value):
+    degrees = int(float(value))
+    minutes = int((float(value) - degrees) * 60)
+    seconds = int((float(value) - degrees - minutes / 60) * 3600)
+    return [(degrees, 1), (minutes, 1), (seconds, 1)]
 
-    # Initialize session state
-    if 'cookies' not in st.session_state:
-        st.session_state.cookies = []
-    if 'groups' not in st.session_state:
-        st.session_state.groups = []
-    if 'is_running' not in st.session_state:
-        st.session_state.is_running = {key: False for key in API_URLS.keys()}
-    if 'results' not in st.session_state:
-        st.session_state.results = {key: [] for key in API_URLS.keys()}
-    if 'selected_items' not in st.session_state:
-        st.session_state.selected_items = {
-            'sendmessagefriends': set(),
-            'sendmessagegroups': set(),
-            'sendmessagelistgroups': set(),
-            'invitegroups': set()
-        }
+def remove_diacritics(input_str):
+    nfkd_form = unicodedata.normalize('NFKD', input_str)
+    return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
 
-    # Sidebar for cookie management
-    with st.sidebar:
-        st.header("Cookie Management")
-        cookie_input = st.text_area("Enter Cookie String", height=100, placeholder="Paste your Zalo cookie here...")
-        cookie_phone = st.text_input("Phone Number (for reference)", placeholder="Enter phone number")
-        if st.button("Add Cookie"):
-            if cookie_input and cookie_phone:
-                st.session_state.cookies.append({'phone': cookie_phone, 'cookie': cookie_input.strip()})
-                st.success(f"Added cookie for {cookie_phone}")
-                logging.debug(f"Added cookie for phone {cookie_phone}: {cookie_input[:100]}...")
-            else:
-                st.error("Please provide both cookie and phone number.")
+def edit_image_metadata(output_image_path, metadata):
+    img = Image.open(output_image_path)
+    try:
+        exif_dict = piexif.load(img.info.get('exif', b''))
+    except Exception:
+        exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "Interop": {}, "1st": {}, "thumbnail": None}
 
-        # Display cookies
-        if st.session_state.cookies:
-            st.subheader("Stored Cookies")
-            for cookie in st.session_state.cookies:
-                st.write(f"Phone: {cookie['phone']}, Cookie: {cookie['cookie'][:20]}...")
+    image_name = os.path.splitext(os.path.basename(output_image_path))[0]
 
-    # Tabs for different functionalities
-    tabs = st.tabs([
-        "Add Friend", "Check Info", "Scan Group", "Send Messages", "Get Friends",
-        "Send Messages to Friends", "Send Messages to Group Members", "Get Groups",
-        "Send Messages to List Groups", "Invite Groups"
-    ])
+    if "ImageDescription" not in metadata or not metadata["ImageDescription"]:
+        metadata["ImageDescription"] = image_name
+    if "XPTitle" not in metadata or not metadata["XPTitle"]:
+        metadata["XPTitle"] = image_name
+    if "XPSubject" not in metadata or not metadata["XPSubject"]:
+        metadata["XPSubject"] = image_name
+    if "Comments" not in metadata or not metadata["Comments"]:
+        metadata["Comments"] = image_name
+    if "DateTimeOriginal" not in metadata or not metadata["DateTimeOriginal"]:
+        metadata["DateTimeOriginal"] = datetime.now().strftime("%Y:%m:%d %H:%M:%S")
 
-    # Tab configurations
-    tab_configs = {
-        'addfriend': {
-            'name': 'Add Friend',
-            'has_list': True,
-            'has_message': True,
-            'param_name': 'uid',
-            'columns': ['STT', 'UID', 'Status', 'Time']
-        },
-        'checkinfo': {
-            'name': 'Check Info',
-            'has_list': True,
-            'has_message': False,
-            'param_name': 'phone',
-            'columns': ['STT', 'Input', 'Zalo Name', 'Display Name', 'Status', 'UID', 'Time']
-        },
-        'scangroup': {
-            'name': 'Scan Group',
-            'has_list': True,
-            'has_message': False,
-            'param_name': 'group_id',
-            'columns': ['STT', 'Group ID', 'Group Name', 'Total Members', 'Member ID', 'Member Name', 'Time']
-        },
-        'sendmessages': {
-            'name': 'Send Messages',
-            'has_list': True,
-            'has_message': True,
-            'param_name': 'phone',
-            'columns': ['STT', 'Input', 'Status', 'Time']
-        },
-        'getfriends': {
-            'name': 'Get Friends',
-            'has_list': False,
-            'has_message': False,
-            'param_name': None,
-            'columns': ['STT', 'userId', 'phoneNumber', 'displayName', 'zaloName', 'sdob', 'status']
-        },
-        'sendmessagefriends': {
-            'name': 'Send Messages to Friends',
-            'has_list': False,
-            'has_message': True,
-            'param_name': None,
-            'columns': ['Select', 'STT', 'userId', 'phoneNumber', 'displayName', 'zaloName', 'sdob', 'status', 'Status'],
-            'has_selection': True
-        },
-        'sendmessagegroups': {
-            'name': 'Send Messages to Group Members',
-            'has_list': True,
-            'has_message': True,
-            'param_name': 'group_id',
-            'columns': ['Select', 'STT', 'Group ID', 'Group Name', 'Total Members', 'Member ID', 'Member Name', 'Time', 'Status'],
-            'has_selection': True
-        },
-        'getgroups': {
-            'name': 'Get Groups',
-            'has_list': False,
-            'has_message': False,
-            'param_name': None,
-            'columns': ['STT', 'groupId', 'name', 'totalMember']
-        },
-        'sendmessagelistgroups': {
-            'name': 'Send Messages to List Groups',
-            'has_list': False,
-            'has_message': True,
-            'param_name': None,
-            'columns': ['Select', 'STT', 'groupId', 'name', 'totalMember', 'Status'],
-            'has_selection': True
-        },
-        'invitegroups': {
-            'name': 'Invite Groups',
-            'has_list': False,
-            'has_message': True,
-            'param_name': None,
-            'columns': ['Select', 'STT', 'userId', 'phoneNumber', 'displayName', 'zaloName', 'sdob', 'status', 'Status'],
-            'has_selection': True
-        }
+    metadata["Tags"] = remove_diacritics(metadata.get("Tags", ""))
+    metadata["Comments"] = remove_diacritics(metadata.get("Comments", ""))
+
+    try:
+        if "GPSLatitude" in metadata and "GPSLongitude" in metadata:
+            exif_dict["GPS"][piexif.GPSIFD.GPSLatitude] = rational_to_dms(metadata["GPSLatitude"])
+            exif_dict["GPS"][piexif.GPSIFD.GPSLongitude] = rational_to_dms(metadata["GPSLongitude"])
+
+        exif_dict["0th"][piexif.ImageIFD.ImageDescription] = metadata["ImageDescription"].encode('utf-8')
+        if "Artist" in metadata:
+            exif_dict["0th"][piexif.ImageIFD.Artist] = metadata["Artist"].encode('utf-8')
+        if "Copyright" in metadata:
+            exif_dict["0th"][piexif.ImageIFD.Copyright] = metadata["Copyright"].encode('utf-8')
+        if "Make" in metadata:
+            exif_dict["0th"][piexif.ImageIFD.Make] = metadata["Make"].encode('utf-8')
+        if "Model" in metadata:
+            exif_dict["0th"][piexif.ImageIFD.Model] = metadata["Model"].encode('utf-8')
+        if "Software" in metadata:
+            exif_dict["0th"][piexif.ImageIFD.Software] = metadata["Software"].encode('utf-8')
+
+        exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal] = metadata["DateTimeOriginal"].encode('utf-8')
+
+        exif_dict["0th"][piexif.ImageIFD.Rating] = 5
+        exif_dict["0th"][piexif.ImageIFD.RatingPercent] = 100
+
+        exif_dict["0th"][piexif.ImageIFD.XPComment] = metadata["Comments"].encode('utf-16le', errors='ignore')
+        exif_dict["0th"][piexif.ImageIFD.XPTitle] = metadata["XPTitle"].encode('utf-16le', errors='ignore')
+        exif_dict["0th"][piexif.ImageIFD.XPSubject] = metadata["XPSubject"].encode('utf-16le', errors='ignore')
+        exif_dict["0th"][piexif.ImageIFD.XPKeywords] = metadata["Tags"].encode('utf-16le', errors='ignore')
+
+        exif_bytes = piexif.dump(exif_dict)
+        img.save(output_image_path, "jpeg", exif=exif_bytes)
+    except Exception as e:
+        st.error(f"Error applying metadata to {output_image_path}: {str(e)}")
+
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, 'r') as f:
+            return json.load(f)
+    return {
+        "max_size": 600,
+        "logo_position": "third",
+        "opacity": 50,
+        "logo_scale": 100,
+        "output_format": "jpg"
     }
 
-    for tab, tab_key in zip(tabs, tab_configs.keys()):
-        with tab:
-            config = tab_configs[tab_key]
-            st.header(config['name'])
+def save_config(config):
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f)
 
-            # Cookie selection
-            cookie_options = [f"{c['phone']}: {c['cookie'][:20]}..." for c in st.session_state.cookies]
-            selected_cookie = st.selectbox("Select Cookie", cookie_options, key=f"cookie_{tab_key}")
-            selected_cookie_data = next((c for c in st.session_state.cookies if f"{c['phone']}: {c['cookie'][:20]}..." == selected_cookie), None)
+def process_single_image(img_path, config, metadata, logo_path):
+    try:
+        image = Image.open(img_path)
+        image.load()
+        image.thumbnail((config["max_size"], config["max_size"]))
 
-            # Group selection for invitegroups
-            if tab_key == 'invitegroups':
-                group_options = [f"{g['name']} (ID: {g['groupId']})" for g in st.session_state.groups]
-                selected_group = st.selectbox("Select Group", group_options, key=f"group_{tab_key}")
+        # Xử lý nền trong suốt (PNG → JPG)
+        if image.mode == "RGBA":
+            background = Image.new("RGB", image.size, (255, 255, 255))
+            background.paste(image, (0, 0), image)
+            image = background
 
-            # Input fields
-            if config['has_list'] and tab_key not in ['getfriends', 'sendmessagefriends', 'getgroups', 'sendmessagelistgroups', 'invitegroups']:
-                if tab_key in ['addfriend', 'sendmessages']:
-                    input_type = st.selectbox("Input Type", ["Phone", "UID"], key=f"input_type_{tab_key}")
-                    list_label = f"List of {input_type}s (one per line)"
-                else:
-                    input_type = None
-                    list_label = f"List of {config['param_name']}s (one per line)"
-                items_input = st.text_area(list_label, height=100, key=f"items_{tab_key}")
+        # Chèn logo nếu có
+        if logo_path and os.path.exists(logo_path):
+            logo = Image.open(logo_path).convert("RGBA")
 
-            if config.get('has_message', False):
-                message_input = st.text_area("Message", height=80, key=f"message_{tab_key}")
+            # Scale logo
+            base_scale = 1 / 3
+            user_scale = config["logo_scale"] / 100.0
+            logo_scale = base_scale * user_scale
 
-            # Timing inputs
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                item_delay = st.number_input("Item Delay (seconds)", min_value=0.0, value=5.0, step=0.1, key=f"item_delay_{tab_key}")
-            with col2:
-                rest_time = st.number_input("Rest Time (minutes)", min_value=0.0, value=10.0, step=0.1, key=f"rest_time_{tab_key}")
-            with col3:
-                rest_after = st.number_input("Rest After (items)", min_value=1, value=100, step=1, key=f"rest_after_{tab_key}")
-            with col4:
-                stop_after = st.number_input("Stop After (items)", min_value=1, value=5000, step=1, key=f"stop_after_{tab_key}")
+            logo_width = int(image.width * logo_scale)
+            logo_height = int(logo_width * (logo.height / logo.width))
+            logo_resized = logo.resize((logo_width, logo_height), Image.LANCZOS)
 
-            # Buttons
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                button_text = "Get" if tab_key in ['sendmessagefriends', 'sendmessagegroups', 'sendmessagelistgroups', 'getfriends', 'getgroups', 'invitegroups'] else "Start"
-                if st.button(button_text, key=f"start_{tab_key}", disabled=st.session_state.is_running[tab_key]):
-                    if not selected_cookie_data:
-                        st.error("Please select a cookie.")
-                    elif config['has_list'] and tab_key not in ['getfriends', 'sendmessagefriends', 'getgroups', 'sendmessagelistgroups', 'invitegroups'] and not items_input.strip():
-                        st.error("Please provide input items.")
-                    elif config.get('has_message', False) and not message_input.strip() and button_text != "Get":
-                        st.error("Please provide a message.")
-                    else:
-                        st.session_state.is_running[tab_key] = True
-                        process_requests(tab_key, config['param_name'], selected_cookie_data['cookie'] if selected_cookie_data else None,
-                                       items_input.strip().split('\n') if config['has_list'] and tab_key not in ['getfriends', 'sendmessagefriends', 'getgroups', 'sendmessagelistgroups', 'invitegroups'] else [''],
-                                       message_input.strip() if config.get('has_message', False) else '',
-                                       item_delay, rest_after, rest_time * 60, stop_after, button_text == "Get",
-                                       selected_group if tab_key == 'invitegroups' else None)
-            with col2:
-                if st.button("Stop", key=f"stop_{tab_key}", disabled=not st.session_state.is_running[tab_key]):
-                    st.session_state.is_running[tab_key] = False
-                    st.success(f"Stopped {tab_key}")
-            with col3:
-                if st.button("Export", key=f"export_{tab_key}"):
-                    export_table(tab_key, config['columns'])
+            # Áp dụng độ mờ
+            opacity_value = config["opacity"] / 100.0
+            alpha = logo_resized.split()[3]
+            alpha = alpha.point(lambda p: int(p * opacity_value))
+            logo_resized.putalpha(alpha)
 
-            # Display results
-            if st.session_state.results[tab_key]:
-                df = pd.DataFrame(st.session_state.results[tab_key], columns=config['columns'])
-                if config.get('has_selection', False):
-                    selected_rows = st.multiselect("Select items", df.index, key=f"select_{tab_key}")
-                    st.session_state.selected_items[tab_key] = set(selected_rows)
-                    df['Select'] = df.index.map(lambda x: '☑' if x in selected_rows else '')
-                st.dataframe(df, use_container_width=True)
-
-def process_requests(tab_type, param_name, cookie, items, message, item_delay, rest_after, rest_time, stop_after, is_get, selected_group=None):
-    stt = 0
-    current_time = datetime.now().strftime('%H:%M:%S')
-    current_date = datetime.now().strftime('%Y-%m-%d')
-    formatted_message = message.replace('{time}', current_time).replace('{date}', current_date) if message else ''
-    if tab_type in ['getfriends', 'sendmessagefriends', 'getgroups', 'sendmessagelistgroups', 'invitegroups']:
-        items = ['']
-
-    st.session_state.results[tab_type] = []
-
-    for i, item in enumerate(items):
-        if not st.session_state.is_running[tab_type]:
-            st.write(f"Stopped {tab_type} processing")
-            break
-        if stt >= stop_after:
-            st.write(f"Stopped {tab_type} after reaching {stop_after} items")
-            break
-
-        original_item = item
-        input_type = st.session_state.get(f"input_type_{tab_type}", "UID") if tab_type in ['addfriend', 'sendmessages'] else None
-
-        # Prepare API request data
-        if tab_type == 'addfriend':
-            data = {'cookie': cookie, 'uid' if input_type == 'UID' else 'phone': item, 'message': formatted_message}
-        elif tab_type == 'sendmessages':
-            data = {'cookie': cookie, 'uid' if input_type == 'UID' else 'phone': item, 'message': formatted_message}
-        elif tab_type == 'checkinfo':
-            data = {'cookie': cookie, 'phone': item}
-        elif tab_type == 'scangroup':
-            mpage = 1
-            saved_group_name = 'N/A'
-            while st.session_state.is_running[tab_type] and stt < stop_after:
-                data = {'cookie': cookie, 'group_id': str(item), 'mpage': str(mpage)}
-                try:
-                    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-                    response = requests.post(API_URLS[tab_type], data=data, headers=headers)
-                    result = json.loads(response.text)
-                    if result.get('status') == 'Success' and result.get('data', {}).get('error_code') == 0:
-                        group_data = result['data']['data']
-                        group_id = group_data.get('groupId', 'N/A')
-                        group_name = group_data.get('name') or saved_group_name
-                        total_members = group_data.get('totalMember', 'N/A')
-                        members = group_data.get('currentMems', [])
-                        if mpage == 1 and group_name != 'N/A':
-                            saved_group_name = group_name
-                        for member in members:
-                            if stt >= stop_after:
-                                break
-                            stt += 1
-                            values = (
-                                stt, group_id, group_name, total_members,
-                                member.get('id', 'N/A'), member.get('dName', 'N/A'),
-                                datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                            )
-                            st.session_state.results[tab_type].append(values)
-                            st.write(f"{tab_type}: Member={member.get('dName')}")
-                        if group_data.get('hasMoreMember') == 0:
-                            break
-                        mpage += 1
-                        time.sleep(item_delay)
-                    else:
-                        break
-                except Exception as e:
-                    st.error(f"{tab_type} request failed: {str(e)}")
-                    break
-            continue
-        elif tab_type == 'getfriends':
-            data = {'cookie': cookie}
-        elif tab_type == 'getgroups':
-            data = {'cookie': cookie}
-        elif tab_type == 'sendmessagefriends':
-            if is_get:
-                data = {'cookie': cookie}
-                try:
-                    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-                    response = requests.post(API_URLS['getfriends'], data=data, headers=headers)
-                    result = json.loads(response.text)
-                    if result.get('error_code') == 0:
-                        friends = result.get('data', [])
-                        for friend in friends:
-                            if stt >= stop_after:
-                                break
-                            stt += 1
-                            values = (
-                                '', stt, friend.get('userId', 'N/A'), friend.get('phoneNumber', 'N/A'),
-                                friend.get('displayName', 'N/A'), friend.get('zaloName', 'N/A'),
-                                friend.get('sdob', 'N/A'), friend.get('status', 'N/A')[:50], 'N/A'
-                            )
-                            st.session_state.results[tab_type].append(values)
-                        st.session_state.selected_items[tab_type].clear()
-                    else:
-                        st.error(f"Error {result.get('error_code')}: {result.get('error_message', 'Unknown error')}")
-                except Exception as e:
-                    st.error(f"Request failed: {str(e)}")
-                continue
+            # Vị trí dán logo
+            position = config["logo_position"]
+            if position == "third":
+                x = image.width // 3
+                y = image.height // 3
+            elif position == "topright":
+                x = image.width - logo_width - 20
+                y = 20
             else:
-                selected_friends = [st.session_state.results[tab_type][i] for i in st.session_state.selected_items[tab_type]]
-                if not selected_friends:
-                    st.error("Please select at least one friend to send messages to.")
-                    st.session_state.is_running[tab_type] = False
-                    return
-                for friend in selected_friends:
-                    if not st.session_state.is_running[tab_type] or stt >= stop_after:
-                        break
-                    stt += 1
-                    uid = friend[2]
-                    name = friend[4]
-                    friend_message = formatted_message.replace('{name}', name)
-                    data = {'cookie': cookie, 'uid': uid, 'message': friend_message}
-                    try:
-                        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-                        response = requests.post(API_URLS[tab_type], data=data, headers=headers)
-                        result = json.loads(response.text)
-                        friend[-1] = f"✅ Success (MsgID: {result.get('msgId', 'N/A')})" if result.get('status') == 'Successfully' else f"❌ {result.get('message', 'Failed')}"
-                        st.write(f"{tab_type}: {name} - {'Success' if result.get('status') == 'Successfully' else 'Failed'}")
-                        time.sleep(item_delay)
-                    except Exception as e:
-                        friend[-1] = f"❌ {str(e)}"
-                        st.error(f"{tab_type}: {name} - Failed: {str(e)}")
-                    if stt % rest_after == 0 and stt < stop_after:
-                        time.sleep(rest_time)
-                continue
-        elif tab_type == 'sendmessagegroups':
-            if is_get:
-                mpage = 1
-                saved_group_name = 'N/A'
-                while st.session_state.is_running[tab_type] and stt < stop_after:
-                    data = {'cookie': cookie, 'group_id': str(item), 'mpage': str(mpage)}
-                    try:
-                        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-                        response = requests.post(API_URLS['scangroup'], data=data, headers=headers)
-                        result = json.loads(response.text)
-                        if result.get('status') == 'Success' and result.get('data', {}).get('error_code') == 0:
-                            group_data = result['data']['data']
-                            group_id = group_data.get('groupId', 'N/A')
-                            group_name = group_data.get('name') or saved_group_name
-                            total_members = group_data.get('totalMember', 'N/A')
-                            members = group_data.get('currentMems', [])
-                            if mpage == 1 and group_name != 'N/A':
-                                saved_group_name = group_name
-                            for member in members:
-                                if stt >= stop_after:
-                                    break
-                                stt += 1
-                                values = (
-                                    '', stt, group_id, group_name, total_members,
-                                    member.get('id', 'N/A'), member.get('dName', 'N/A'),
-                                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'N/A'
-                                )
-                                st.session_state.results[tab_type].append(values)
-                            if group_data.get('hasMoreMember') == 0:
-                                break
-                            mpage += 1
-                            time.sleep(item_delay)
-                        else:
-                            break
-                    except Exception as e:
-                        st.error(f"{tab_type} request failed: {str(e)}")
-                        break
-                st.session_state.selected_items[tab_type].clear()
-                continue
-            else:
-                selected_members = [st.session_state.results[tab_type][i] for i in st.session_state.selected_items[tab_type]]
-                if not selected_members:
-                    st.error("No group members selected.")
-                    st.session_state.is_running[tab_type] = False
-                    return
-                for member in selected_members:
-                    if not st.session_state.is_running[tab_type] or stt >= stop_after:
-                        break
-                    stt += 1
-                    data = {'cookie': cookie, 'uid': member[5], 'message': formatted_message.replace('{name}', member[6])}
-                    try:
-                        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-                        response = requests.post(API_URLS[tab_type], data=data, headers=headers)
-                        result = json.loads(response.text)
-                        member[-1] = f"✅ Success (MsgID: {result.get('msgId', 'N/A')})" if result.get('status') == 'Successfully' else f"❌ {result.get('message', 'Failed')}"
-                        st.write(f"{tab_type}: {member[6]} - {'Success' if result.get('status') == 'Successfully' else 'Failed'}")
-                        time.sleep(item_delay)
-                    except Exception as e:
-                        member[-1] = f"❌ {str(e)}"
-                        st.error(f"{tab_type}: {member[6]} - Failed: {str(e)}")
-                    if stt % rest_after == 0 and stt < stop_after:
-                        time.sleep(rest_time)
-                continue
-        elif tab_type == 'sendmessagelistgroups':
-            if is_get:
-                data = {'cookie': cookie}
-                try:
-                    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-                    response = requests.post(API_URLS['getgroups'], data=data, headers=headers)
-                    result = json.loads(response.text)
-                    if result.get('error_code') == 0:
-                        groups = result.get('data', [])
-                        for group in groups:
-                            if stt >= stop_after:
-                                break
-                            stt += 1
-                            values = (
-                                '', stt, group.get('groupId', 'N/A'), group.get('name', 'N/A'),
-                                group.get('totalMember', 'N/A'), 'N/A'
-                            )
-                            st.session_state.results[tab_type].append(values)
-                        st.session_state.selected_items[tab_type].clear()
-                    else:
-                        st.error(f"Error {result.get('error_code')}: {result.get('error_message', 'Unknown error')}")
-                except Exception as e:
-                    st.error(f"Request failed: {str(e)}")
-                continue
-            else:
-                selected_groups = [st.session_state.results[tab_type][i] for i in st.session_state.selected_items[tab_type]]
-                if not selected_groups:
-                    st.error("No groups selected.")
-                    st.session_state.is_running[tab_type] = False
-                    return
-                for group in selected_groups:
-                    if not st.session_state.is_running[tab_type] or stt >= stop_after:
-                        break
-                    stt += 1
-                    data = {'cookie': cookie, 'group_id': group[2], 'message': formatted_message.replace('{name}', group[3])}
-                    try:
-                        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-                        response = requests.post(API_URLS[tab_type], data=data, headers=headers)
-                        result = json.loads(response.text)
-                        group[-1] = f"✅ Success (MsgID: {result.get('data', {}).get('data', {}).get('msgId', 'N/A')})" if result.get('status') == 'Success' else f"❌ {result.get('data', {}).get('error_message', 'Failed')}"
-                        st.write(f"{tab_type}: {group[3]} - {'Success' if result.get('status') == 'Success' else 'Failed'}")
-                        time.sleep(item_delay)
-                    except Exception as e:
-                        group[-1] = f"❌ {str(e)}"
-                        st.error(f"{tab_type}: {group[3]} - Failed: {str(e)}")
-                    if stt % rest_after == 0 and stt < stop_after:
-                        time.sleep(rest_time)
-                continue
-        elif tab_type == 'invitegroups':
-            if is_get:
-                friends_data = {'cookie': cookie}
-                groups_data = {'cookie': cookie}
-                try:
-                    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-                    friends_response = requests.post(API_URLS['getfriends'], data=friends_data, headers=headers)
-                    groups_response = requests.post(API_URLS['getgroups'], data=groups_data, headers=headers)
-                    friends_result = json.loads(friends_response.text)
-                    groups_result = json.loads(groups_response.text)
-                    if friends_result.get('error_code') == 0 and groups_result.get('error_code') == 0:
-                        st.session_state.groups = groups_result.get('data', [])
-                        friends = friends_result.get('data', [])
-                        for friend in friends:
-                            if stt >= stop_after:
-                                break
-                            stt += 1
-                            values = (
-                                '', stt, friend.get('userId', 'N/A'), friend.get('phoneNumber', 'N/A'),
-                                friend.get('displayName', 'N/A'), friend.get('zaloName', 'N/A'),
-                                friend.get('sdob', 'N/A'), friend.get('status', 'N/A')[:50], 'N/A'
-                            )
-                            st.session_state.results[tab_type].append(values)
-                        st.session_state.selected_items[tab_type].clear()
-                    else:
-                        st.error(f"Friends Error {friends_result.get('error_code')}: {friends_result.get('error_message')} | Groups Error {groups_result.get('error_code')}: {groups_result.get('error_message')}")
-                except Exception as e:
-                    st.error(f"Request failed: {str(e)}")
-                continue
-            else:
-                if not selected_group:
-                    st.error("Please select a group.")
-                    st.session_state.is_running[tab_type] = False
-                    return
-                group_id = next((g['groupId'] for g in st.session_state.groups if f"{g['name']} (ID: {g['groupId']})" == selected_group), None)
-                group_name = next((g['name'] for g in st.session_state.groups if f"{g['name']} (ID: {g['groupId']})" == selected_group), 'N/A')
-                if not group_id:
-                    st.error("Selected group not found.")
-                    st.session_state.is_running[tab_type] = False
-                    return
-                selected_friends = [st.session_state.results[tab_type][i] for i in st.session_state.selected_items[tab_type]]
-                if not selected_friends:
-                    st.error("Please select at least one friend to invite.")
-                    st.session_state.is_running[tab_type] = False
-                    return
-                uids_list = ','.join([str(friend[2]) for friend in selected_friends])
-                data = {
-                    'cookie': cookie,
-                    'group_id': str(group_id),
-                    'uid': uids_list,
-                    'message': formatted_message or 'Xin mời bạn tham gia nhóm nhé!'
-                }
-                batch_size = len(selected_friends)
-                try:
-                    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-                    response = requests.post(API_URLS[tab_type], data=data, headers=headers)
-                    result = json.loads(response.text)
-                    if result.get('status') == 'Success':
-                        success_msg = f"✅ Batch Success ({batch_size} friends)"
-                        for friend in selected_friends:
-                            friend[-1] = success_msg[:50]
-                        st.write(f"Invited {batch_size} friends to {group_name}")
-                        stt += batch_size
-                    else:
-                        error_msg = result.get('error', 'Failed')
-                        for friend in selected_friends:
-                            friend[-1] = f"❌ {error_msg[:40]}"
-                        st.error(f"Batch failed: {error_msg}")
-                    time.sleep(item_delay)
-                    if stt % rest_after == 0 and stt < stop_after:
-                        time.sleep(rest_time)
-                except Exception as e:
-                    error_msg = f"Request failed: {str(e)}"
-                    for friend in selected_friends:
-                        friend[-1] = f"❌ {error_msg[:40]}"
-                    st.error(f"Batch invite exception: {error_msg}")
-                continue
+                x, y = 100, image.height - logo_height - 100
+
+            image.paste(logo_resized, (x, y), logo_resized)
+
+        # Lưu ảnh
+        out_ext = config["output_format"].lower()
+        out_name = os.path.splitext(os.path.basename(img_path))[0] + f".{out_ext}"
+        output_image_path = os.path.join(OUTPUT_FOLDER, out_name)
+
+        if out_ext in ["jpg", "jpeg"]:
+            image.convert("RGB").save(
+                output_image_path, "JPEG", quality=85, optimize=True, progressive=True
+            )
+            edit_image_metadata(output_image_path, metadata.copy())
+        elif out_ext == "png":
+            image.save(output_image_path, "PNG", optimize=True)
+        elif out_ext == "webp":
+            image.save(output_image_path, "WEBP", quality=80, method=6)
+
+        return output_image_path, True
+    except Exception as e:
+        return None, str(e)
+
+# ========== Streamlit App ==========
+def main():
+    st.set_page_config(
+        page_title="GEOTAG ẢNH HOÀNG LOẠT",
+        page_icon="📸",
+        layout="wide"
+    )
+
+    # Tạo thư mục output
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+    # Header
+    st.title("📸 GEOTAG ẢNH HOÀNG LOẠT")
+    st.markdown("*HỖ TRỢ: 0967849934*")
+
+    # Load config
+    config = load_config()
+
+    # Sidebar
+    with st.sidebar:
+        st.header("⚙️ Cài đặt")
+        
+        # Max Size
+        config["max_size"] = st.slider("Max Size", 200, 2000, config["max_size"])
+        
+        # Logo Position
+        config["logo_position"] = st.radio(
+            "Vị trí Logo", 
+            ["third", "topright"], 
+            format_func=lambda x: "1/3 ảnh" if x == "third" else "Góc trên bên phải",
+            index=0 if config["logo_position"] == "third" else 1
+        )
+        
+        # Opacity & Scale (cùng hàng)
+        col1, col2 = st.columns(2)
+        with col1:
+            config["opacity"] = st.slider("Độ mờ (%)", 0, 100, config["opacity"])
+        with col2:
+            config["logo_scale"] = st.slider("Kích thước Logo (%)", 10, 200, config["logo_scale"])
+        
+        # Output Format
+        config["output_format"] = st.selectbox(
+            "Định dạng xuất", 
+            ["jpg", "jpeg", "png", "webp"], 
+            index=["jpg", "jpeg", "png", "webp"].index(config["output_format"])
+        )
+        
+        st.markdown("---")
+        if st.button("💾 Lưu Cấu hình"):
+            save_config(config)
+            st.success("Đã lưu cấu hình!")
+
+    # Main content
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.subheader("📁 Chọn Ảnh")
+        uploaded_files = st.file_uploader(
+            "Chọn nhiều ảnh", 
+            type=['jpg', 'jpeg', 'png', 'webp', 'heic'],
+            accept_multiple_files=True,
+            help="Hỗ trợ: JPG, JPEG, PNG, WEBP, HEIC"
+        )
+        
+        if uploaded_files:
+            image_paths = []
+            for file in uploaded_files:
+                # Lưu file tạm
+                temp_path = os.path.join("temp", file.name)
+                os.makedirs("temp", exist_ok=True)
+                with open(temp_path, "wb") as f:
+                    f.write(file.getbuffer())
+                image_paths.append(temp_path)
+            
+            st.text(f"Đã chọn: **{len(image_paths)} ảnh**")
+            for path in image_paths[:5]:  # Hiển thị 5 ảnh đầu
+                st.text(f"• {os.path.basename(path)}")
+
+    with col2:
+        st.subheader("🏷️ Metadata")
+        if st.button("📝 Mở metadata.txt"):
+            with open("metadata.txt", "w", encoding="utf-8") as f:
+                f.write("# Định dạng: Tên trường: Giá trị\n")
+                f.write("ImageDescription: Mô tả ảnh\n")
+                f.write("Tags: từ khóa 1, từ khóa 2\n")
+                f.write("GPSLatitude: 21.0285\n")
+                f.write("GPSLongitude: 105.8542\n")
+            st.success("Đã tạo metadata.txt! Mở bằng Notepad để chỉnh sửa.")
+        
+        st.info("**Cần file:** `metadata.txt` trong thư mục gốc")
+
+        st.subheader("🏷️ Logo")
+        logo_file = st.file_uploader("Chọn logo", type=['png', 'jpg', 'jpeg'])
+        if logo_file:
+            logo_path = os.path.join("temp", logo_file.name)
+            with open(logo_path, "wb") as f:
+                f.write(logo_file.getbuffer())
+            st.image(logo_file, caption="Logo Preview", width=150)
+            config["logo_path"] = logo_path
         else:
-            data = {'cookie': cookie, param_name: item}
+            config["logo_path"] = ""
 
-        try:
-            headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-            response = requests.post(API_URLS[tab_type], data=data, headers=headers)
-            result = json.loads(response.text)
-            if tab_type == 'addfriend':
-                stt += 1
-                values = (
-                    stt, original_item,
-                    f"✅ Success (Status: {result.get('data', {}).get('status', 'N/A')}, Is Friend: {result.get('data', {}).get('is_friend', 'N/A')})" if result.get('error_code') == 0 else f"❌ Error {result.get('error_code')}: {result.get('error_message', 'Unknown error')}",
-                    datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                )
-            elif tab_type == 'sendmessages':
-                stt += 1
-                values = (
-                    stt, original_item,
-                    f"✅ Success (MsgID: {result.get('msgId', 'N/A')})" if result.get('status') == 'Successfully' else f"❌ {result.get('message', 'Failed')}",
-                    datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                )
-            elif tab_type == 'checkinfo':
-                stt += 1
-                if result.get('error_code') == 0:
-                    data = result.get('data', {})
-                    values = (
-                        stt, original_item, data.get('zalo_name', 'N/A'), data.get('display_name', 'N/A'),
-                        data.get('status', 'N/A')[:50], data.get('uid', 'N/A'),
-                        datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    )
-                else:
-                    values = (
-                        stt, original_item, 'N/A', 'N/A', f"❌ Error {result.get('error_code')}: {result.get('error_message', 'Unknown error')}", 'N/A',
-                        datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    )
-            elif tab_type == 'getfriends':
-                if result.get('error_code') == 0:
-                    friends = result.get('data', [])
-                    for friend in friends:
-                        if stt >= stop_after:
-                            break
-                        stt += 1
-                        values = (
-                            stt, friend.get('userId', 'N/A'), friend.get('phoneNumber', 'N/A'),
-                            friend.get('displayName', 'N/A'), friend.get('zaloName', 'N/A'),
-                            friend.get('sdob', 'N/A'), friend.get('status', 'N/A')[:50]
-                        )
-                        st.session_state.results[tab_type].append(values)
-                    continue
-                else:
-                    st.error(f"Error {result.get('error_code')}: {result.get('error_message', 'Unknown error')}")
-                    continue
-            elif tab_type == 'getgroups':
-                if result.get('error_code') == 0:
-                    groups = result.get('data', [])
-                    for group in groups:
-                        if stt >= stop_after:
-                            break
-                        stt += 1
-                        values = (
-                            stt, group.get('groupId', 'N/A'), group.get('name', 'N/A'),
-                            group.get('totalMember', 'N/A')
-                        )
-                        st.session_state.results[tab_type].append(values)
-                    continue
-                else:
-                    st.error(f"Error {result.get('error_code')}: {result.get('error_message', 'Unknown error')}")
-                    continue
-            st.session_state.results[tab_type].append(values)
-            time.sleep(item_delay)
-            if stt % rest_after == 0 and stt < stop_after:
-                time.sleep(rest_time)
-        except Exception as e:
-            st.error(f"Request failed: {str(e)}")
-            if tab_type == 'addfriend':
-                stt += 1
-                values = (stt, original_item, f"❌ {str(e)}", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            elif tab_type == 'sendmessages':
-                stt += 1
-                values = (stt, original_item, f"❌ {str(e)}", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            elif tab_type == 'checkinfo':
-                stt += 1
-                values = (stt, original_item, 'N/A', 'N/A', f"❌ {str(e)}", 'N/A', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    # Progress bar & Process button
+    if st.button("🚀 CHẠY XỬ LÝ", type="primary", use_container_width=True) and image_paths:
+        metadata_file = "metadata.txt"
+        if not os.path.exists(metadata_file):
+            st.error("❌ **Không tìm thấy metadata.txt**")
+            st.info("Tạo file bằng nút 'Mở metadata.txt' ở sidebar")
+            return
+
+        metadata = load_metadata_from_file(metadata_file)
+        save_config(config)
+
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        result_placeholder = st.empty()
+
+        success_count = 0
+        total = len(image_paths)
+
+        os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+        for i, img_path in enumerate(image_paths):
+            status_text.text(f"Đang xử lý: {os.path.basename(img_path)} ({i+1}/{total})")
+            progress_bar.progress((i + 1) / total)
+
+            output_path, error = process_single_image(img_path, config, metadata, config.get("logo_path"))
+            
+            if error:
+                result_placeholder.error(f"❌ {os.path.basename(img_path)}: {error}")
             else:
-                continue
-            st.session_state.results[tab_type].append(values)
+                success_count += 1
+                result_placeholder.success(f"✅ {os.path.basename(output_path)}")
 
-    st.session_state.is_running[tab_type] = False
-    st.success(f"Completed {tab_type}")
+        # Kết quả cuối
+        progress_bar.progress(1.0)
+        status_text.text("🎉 HOÀN TẤT!")
+        
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.success(f"**{success_count}/{total} ảnh thành công**")
+        with col_b:
+            st.info(f"📁 **Output:** `{OUTPUT_FOLDER}`")
 
-def export_table(tab_type, columns):
-    data = st.session_state.results[tab_type]
-    if not data:
-        st.warning("No data to export.")
-        return
-    df = pd.DataFrame(data, columns=columns)
-    filename = f"{tab_type}_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    df.to_excel(filename, index=False)
-    st.success(f"Exported {len(data)} rows to {filename}")
+        # Download all
+        with open(os.path.join(OUTPUT_FOLDER, "__success.txt"), "w") as f:
+            f.write(f"Xử lý thành công {success_count}/{total} ảnh\n")
+        
+        with open(os.path.join(OUTPUT_FOLDER, "__success.txt"), "rb") as f:
+            st.download_button(
+                label="📥 Tải toàn bộ Output (ZIP)",
+                data=f,
+                file_name="geotag_result.zip",
+                mime="application/zip"
+            )
+
+        # Hiển thị ảnh mẫu
+        if success_count > 0:
+            sample_files = [f for f in os.listdir(OUTPUT_FOLDER) if f.endswith(('.jpg', '.jpeg', '.png', '.webp'))][:3]
+            if sample_files:
+                st.subheader("👀 **Xem trước kết quả**")
+                cols = st.columns(len(sample_files))
+                for i, filename in enumerate(sample_files):
+                    with cols[i]:
+                        img = Image.open(os.path.join(OUTPUT_FOLDER, filename))
+                        st.image(img, caption=filename, width=200)
+
+    elif st.button("🚀 CHẠY XỬ LÝ", type="primary") and not image_paths:
+        st.warning("⚠️ **Vui lòng chọn ít nhất 1 ảnh!**")
+
+    # Footer
+    st.markdown("---")
+    st.markdown("*© 2025 GEOTAG ẢNH HOÀNG LOẠT - HỖ TRỢ: 0967849934*")
 
 if __name__ == "__main__":
     main()
-
