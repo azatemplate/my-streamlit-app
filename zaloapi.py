@@ -5,7 +5,6 @@ from datetime import datetime
 import json
 import logging
 import pandas as pd
-import openpyxl
 
 current_version = "1.0.0.00010"
 
@@ -638,3 +637,4 @@ def export_table(tab_type, columns):
 
 if __name__ == "__main__":
     main()
+
