@@ -72,7 +72,7 @@ def process_single_image(image_bytes, config, metadata, logo_bytes):
             position = config["logo_position"]
             if position == "third":
                 x, y = image.width//3, image.height//3
-            else:  # topright
+            else:
                 x, y = image.width - logo_width - 20, 20
 
             image.paste(logo_resized, (x, y), logo_resized)
@@ -94,10 +94,10 @@ def process_single_image(image_bytes, config, metadata, logo_bytes):
         meta_text = "\n".join([f"{k}: {remove_diacritics(v)}" for k, v in metadata.items()])
         meta_bytes = meta_text.encode("utf-8")
         
-        return output_bytes, meta_bytes, True
+        return output_bytes, meta_bytes, None  # ✅ None = SUCCESS
         
     except Exception as e:
-        return None, None, str(e)
+        return None, None, str(e)  # ❌ str(e) = ERROR
 
 def create_zip(all_images, all_metas):
     zip_buffer = io.BytesIO()
@@ -260,3 +260,4 @@ with tab3:
 
 st.markdown("---")
 st.markdown("*© 2025 GEOTAG ẢNH HOÀNG LOẠT - 0967849934*")
+
